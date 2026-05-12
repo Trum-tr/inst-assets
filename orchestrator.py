@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from prompt_library import get_prompt
 from passport import passport_summary, apply_strategy_update
+from lead_registry import add_lead, update_stage, get_funnel_stats, format_funnel_telegram
 
 # ── Кросс-платформенная буферизация (Mac + Windows) ───────────────────────────
 try:
@@ -358,8 +359,8 @@ def main_keyboard() -> dict:
                 {"text": "🗺 Паспорт",     "callback_data": "/passport"},
             ],
             [
-                {"text": "📋 Отчёт",       "callback_data": "/report"},
-                {"text": "🎯 Лиды",        "callback_data": "/leads"},
+                {"text": "📋 Отчёт",        "callback_data": "/report"},
+                {"text": "📊 Dashboard",    "callback_data": "/makedashboard"},
             ],
         ]
     }
@@ -515,33 +516,65 @@ def cmd_status(chat_id: str, state: dict):
     )
 
 def cmd_leads(chat_id: str, _state: dict):
-    f = BASE / "lead_registry.json"
-    if not f.exists():
-        tg_send("Лидов пока нет.", chat_id)
-        return
     try:
-        data  = json.loads(f.read_text(encoding="utf-8"))
-        total = len(data)
-        week  = count_weekly_leads()
+        stats = get_funnel_stats()
+        if stats["total"] == 0:
+            tg_send("Лидов пока нет. Дождись первых триггеров в директ.", chat_id)
+            return
+        tg_send(format_funnel_telegram(stats), chat_id)
+    except Exception as e:
+        tg_send(f"Ошибка: {e}", chat_id)
 
-        # Топ триггеров
-        triggers = {}
-        for v in data.values():
-            if isinstance(v, dict):
-                t = v.get("trigger", "?")
-                triggers[t] = triggers.get(t, 0) + 1
-        top = "\n".join(f"  {t}: {c}" for t, c in
-                        sorted(triggers.items(), key=lambda x: -x[1]))
 
+def cmd_updatelead(chat_id: str, _state: dict, text: str = ""):
+    """Обновить статус лида: /updatelead @username stage [заметка]
+    Этапы: new, dialogue, warm, client, lost
+    """
+    args = text.strip()
+    if args.lower().startswith("/updatelead"):
+        args = args[len("/updatelead"):].strip()
+
+    parts = args.split(None, 2)
+    if len(parts) < 2:
         tg_send(
-            f"<b>🎯 Лиды</b>\n\n"
-            f"Всего: <b>{total}</b>\n"
-            f"За неделю: <b>{week}</b>\n\n"
-            f"<b>По триггерам:</b>\n{top or '  —'}",
+            "Формат: <code>/updatelead @username stage</code>\n\n"
+            "Этапы: new, dialogue, warm, client, lost\n\n"
+            "Пример:\n"
+            "<code>/updatelead @ivan_designer warm Хочет разбор</code>",
+            chat_id
+        )
+        return
+
+    username = parts[0].lstrip("@")
+    stage    = parts[1].lower()
+    note     = parts[2] if len(parts) > 2 else ""
+
+    ok = update_stage(username, stage, note)
+    if ok:
+        labels = {"new":"🆕 Новый","dialogue":"💬 Диалог","warm":"🔥 Тёплый",
+                  "client":"💰 Клиент","lost":"❌ Потерян"}
+        tg_send(
+            f"✅ @{username} → {labels.get(stage, stage)}"
+            + (f"\n📝 {note}" if note else ""),
+            chat_id
+        )
+    else:
+        tg_send(f"❌ Лид @{username} не найден или этап '{stage}' неверный.", chat_id)
+
+
+def cmd_makedashboard(chat_id: str, _state: dict):
+    """Генерирует dashboard.html и сообщает путь."""
+    try:
+        from dashboard_generator import save_dashboard
+        path = save_dashboard()
+        tg_send(
+            f"✅ <b>Dashboard обновлён</b>\n\n"
+            f"📂 Открой в браузере:\n"
+            f"<code>{path}</code>",
             chat_id
         )
     except Exception as e:
-        tg_send(f"Ошибка: {e}", chat_id)
+        tg_send(f"❌ Ошибка генерации: {e}", chat_id)
 
 def cmd_run(chat_id: str, state: dict) -> dict:
     tg_send("🚀 Запускаю публикацию...\n⏳ Займёт 3-5 минут, результат придёт сюда.", chat_id)
@@ -858,8 +891,10 @@ COMMANDS = {
     "/diagnose":     cmd_diagnose,
     "/research":     cmd_research,
     "/strategy":     cmd_strategy,
-    "/passport":     cmd_passport,
-    "/backlog":      cmd_backlog,
+    "/passport":      cmd_passport,
+    "/backlog":       cmd_backlog,
+    "/updatelead":    cmd_updatelead,
+    "/makedashboard": cmd_makedashboard,
     "/addtopic":     cmd_addtopic,
     "/cleartopic":   cmd_cleartopic,
     "/restart":      cmd_restart,
