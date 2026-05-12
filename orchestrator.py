@@ -362,6 +362,10 @@ def main_keyboard() -> dict:
                 {"text": "📋 Отчёт",        "callback_data": "/report"},
                 {"text": "📊 Dashboard",    "callback_data": "/makedashboard"},
             ],
+            [
+                {"text": "🔥 Вирусный",     "callback_data": "/viral"},
+                {"text": "🔥 Вирус (анализ)","callback_data": "/viraldry"},
+            ],
         ]
     }
 
@@ -473,6 +477,8 @@ def cmd_help(chat_id: str, _state: dict):
         "/report     — аналитика Instagram + GPT-совет\n"
         "/leads      — статистика лидов\n"
         "/audit      — аудит файлов и сессии\n"
+        "/viral      — найти + репостить вирусный Reel с разбором\n"
+        "/viraldry   — только анализ вирусного Reel (без публикации)\n"
         "/restart    — перезапустить оркестратор\n"
         "/help       — эта справка",
         chat_id
@@ -854,6 +860,45 @@ def cmd_restart(chat_id: str, _state: dict):
     time.sleep(2)
     sys.exit(0)
 
+def cmd_viral(chat_id: str, state: dict, dry: bool = False) -> dict:
+    """Запускает Viral Curator Agent — находит и репостит вирусный Reel."""
+    mode = "анализ без публикации" if dry else "поиск + публикация"
+    tg_send(
+        f"🔥 <b>Viral Curator запущен</b> ({mode})\n\n"
+        f"⏳ Ищу вирусные Reels по нишевым хэштегам...\n"
+        f"Займёт 5-10 минут, результат придёт сюда.",
+        chat_id
+    )
+
+    def _run():
+        args = [sys.executable, str(BASE / "viral_curator_agent.py")]
+        if dry:
+            args.append("--dry")
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"]       = "1"
+        try:
+            result = subprocess.run(
+                args, capture_output=True, text=True, timeout=600,
+                cwd=str(BASE), encoding="utf-8", env=env
+            )
+            if result.returncode != 0:
+                err = (result.stdout + result.stderr)[-400:]
+                tg_send(f"⚠️ Viral Curator ошибка:\n<code>{err}</code>", chat_id)
+        except subprocess.TimeoutExpired:
+            tg_send("⏰ Viral Curator: таймаут (10 мин). Попробуй позже.", chat_id)
+        except Exception as e:
+            tg_send(f"❌ Viral Curator: {e}", chat_id)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return state
+
+
+def cmd_viraldry(chat_id: str, state: dict) -> dict:
+    """Viral Curator в режиме анализа без публикации."""
+    return cmd_viral(chat_id, state, dry=True)
+
+
 def cmd_start_agents(chat_id: str, _state: dict):
     """Перезапускает DM-агента и сообщает о статусе."""
     tg_send("🔄 Перезапускаю агентов...", chat_id)
@@ -899,6 +944,8 @@ COMMANDS = {
     "/cleartopic":   cmd_cleartopic,
     "/restart":      cmd_restart,
     "/start_agents": cmd_start_agents,
+    "/viral":        cmd_viral,
+    "/viraldry":     cmd_viraldry,
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
