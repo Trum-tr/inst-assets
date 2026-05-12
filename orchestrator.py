@@ -329,8 +329,8 @@ def main_keyboard() -> dict:
                 {"text": "📊 Стратегия",   "callback_data": "/strategy"},
             ],
             [
+                {"text": "📋 Бэклог",      "callback_data": "/backlog"},
                 {"text": "📋 Отчёт",       "callback_data": "/report"},
-                {"text": "🎯 Лиды",        "callback_data": "/leads"},
             ],
         ]
     }
@@ -432,15 +432,19 @@ def bar(pct: float, width=10) -> str:
 def cmd_help(chat_id: str, _state: dict):
     tg_send(
         "<b>🤖 Оркестратор @inst.insider.ru</b>\n\n"
-        "/dashboard — полный дашборд KPI и системы\n"
-        "/status    — краткое состояние и KPI\n"
-        "/run       — запустить публикацию прямо сейчас\n"
-        "/optimize  — анализ + GPT-оптимизация системы\n"
-        "/report    — аналитика Instagram + GPT-совет\n"
-        "/leads     — статистика лидов\n"
-        "/audit     — аудит файлов и сессии\n"
-        "/restart   — перезапустить оркестратор\n"
-        "/help      — эта справка",
+        "/dashboard  — полный дашборд KPI и системы\n"
+        "/status     — краткое состояние и KPI\n"
+        "/run        — запустить публикацию прямо сейчас\n"
+        "/backlog    — очередь тем для публикации\n"
+        "/addtopic   — добавить тему вручную\n"
+        "/research   — запустить Research Agent\n"
+        "/strategy   — запустить стратегический анализ\n"
+        "/optimize   — анализ + GPT-оптимизация системы\n"
+        "/report     — аналитика Instagram + GPT-совет\n"
+        "/leads      — статистика лидов\n"
+        "/audit      — аудит файлов и сессии\n"
+        "/restart    — перезапустить оркестратор\n"
+        "/help       — эта справка",
         chat_id
     )
 
@@ -639,6 +643,140 @@ def cmd_optimize(chat_id: str, state: dict) -> dict:
     save_state(state)
     return state
 
+def cmd_backlog(chat_id: str, _state: dict):
+    """Показывает очередь тем из Content Backlog."""
+    path = BASE / "content_backlog.json"
+    if not path.exists():
+        tg_send("📭 Content Backlog пуст. Запусти /research чтобы заполнить.", chat_id)
+        return
+    try:
+        backlog = json.loads(path.read_text(encoding="utf-8"))
+        pending = [x for x in backlog if x.get("status") == "pending"]
+        used    = [x for x in backlog if x.get("status") == "used"]
+
+        if not pending:
+            tg_send(
+                f"📭 Все темы использованы ({len(used)} шт.)\n"
+                "Запусти /research чтобы добавить новые.", chat_id
+            )
+            return
+
+        pending_sorted = sorted(pending, key=lambda x: -x.get("priority", 0))
+        lines = []
+        for i, item in enumerate(pending_sorted[:8], 1):
+            fmt   = item.get("format", "carousel")
+            prio  = item.get("priority", 0)
+            emoji = "🖼️" if fmt == "carousel" else "🎬"
+            lines.append(
+                f"{i}. {emoji} <b>{item['topic'][:55]}</b>\n"
+                f"   Триггер: {item.get('trigger_word','?')} | Приоритет: {prio}"
+            )
+
+        tg_send(
+            f"<b>📋 Content Backlog</b>\n"
+            f"В очереди: <b>{len(pending)}</b> | Использовано: {len(used)}\n"
+            f"{'─'*28}\n\n"
+            + "\n\n".join(lines) +
+            (f"\n\n<i>...и ещё {len(pending)-8}</i>" if len(pending) > 8 else "") +
+            "\n\n<i>Добавить тему: /addtopic Название темы</i>",
+            chat_id
+        )
+    except Exception as e:
+        tg_send(f"Ошибка чтения backlog: {e}", chat_id)
+
+
+def cmd_addtopic(chat_id: str, _state: dict, text: str = ""):
+    """Добавляет тему вручную в Content Backlog.
+    Формат: /addtopic Название темы
+    Или:    /addtopic Название | reels | ПЛАН
+    """
+    # Убираем команду, берём остаток
+    args = text.strip()
+    if text.lower().startswith("/addtopic"):
+        args = text[len("/addtopic"):].strip()
+
+    if not args:
+        tg_send(
+            "Напиши тему после команды:\n"
+            "<code>/addtopic Как вырасти с 0 до 10к подписчиков</code>\n\n"
+            "Или с параметрами (через |):\n"
+            "<code>/addtopic Тема | carousel | ГАЙД</code>",
+            chat_id
+        )
+        return
+
+    # Парсим аргументы
+    parts   = [p.strip() for p in args.split("|")]
+    topic   = parts[0]
+    fmt     = parts[1].lower() if len(parts) > 1 else "carousel"
+    trigger = parts[2].upper() if len(parts) > 2 else "ГАЙД"
+
+    if fmt not in ("carousel", "reels"):
+        fmt = "carousel"
+
+    path = BASE / "content_backlog.json"
+    backlog = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+
+    # Генерируем ID
+    existing_ids = [x.get("id", "") for x in backlog]
+    new_id = f"manual-{len(backlog)+1:03d}"
+    while new_id in existing_ids:
+        new_id = f"manual-{int(new_id.split('-')[-1])+1:03d}"
+
+    new_item = {
+        "id":           new_id,
+        "topic":        topic,
+        "angle":        "ручное добавление",
+        "pain":         "",
+        "format":       fmt,
+        "trigger_word": trigger,
+        "priority":     7,
+        "status":       "pending",
+        "source":       "manual",
+        "added_at":     datetime.now().isoformat(),
+    }
+
+    backlog.append(new_item)
+    path.write_text(json.dumps(backlog, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    emoji = "🖼️" if fmt == "carousel" else "🎬"
+    tg_send(
+        f"✅ <b>Тема добавлена в очередь</b>\n\n"
+        f"{emoji} {topic}\n"
+        f"Формат: {fmt} | Триггер: {trigger}\n"
+        f"ID: <code>{new_id}</code>\n\n"
+        f"<i>Будет использована при следующей публикации.</i>",
+        chat_id
+    )
+
+
+def cmd_cleartopic(chat_id: str, _state: dict, text: str = ""):
+    """Удаляет тему из backlog по ID: /cleartopic manual-001"""
+    args = text.strip()
+    if text.lower().startswith("/cleartopic"):
+        args = text[len("/cleartopic"):].strip()
+
+    if not args:
+        tg_send("Укажи ID темы: <code>/cleartopic manual-001</code>", chat_id)
+        return
+
+    path = BASE / "content_backlog.json"
+    if not path.exists():
+        tg_send("Backlog пуст.", chat_id)
+        return
+
+    backlog = json.loads(path.read_text(encoding="utf-8"))
+    before  = len(backlog)
+    backlog = [x for x in backlog if x.get("id") != args]
+
+    if len(backlog) == before:
+        tg_send(f"Тема с ID <code>{args}</code> не найдена.", chat_id)
+        return
+
+    path.write_text(json.dumps(backlog, ensure_ascii=False, indent=2), encoding="utf-8")
+    tg_send(f"🗑️ Тема <code>{args}</code> удалена из backlog.", chat_id)
+
+
 def cmd_restart(chat_id: str, _state: dict):
     tg_send(
         "♻️ <b>Перезапускаю оркестратор...</b>\n"
@@ -686,6 +824,9 @@ COMMANDS = {
     "/diagnose":     cmd_diagnose,
     "/research":     cmd_research,
     "/strategy":     cmd_strategy,
+    "/backlog":      cmd_backlog,
+    "/addtopic":     cmd_addtopic,
+    "/cleartopic":   cmd_cleartopic,
     "/restart":      cmd_restart,
     "/start_agents": cmd_start_agents,
 }
@@ -694,18 +835,22 @@ COMMANDS = {
 # TELEGRAM POLLING THREAD
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def handle_command(cmd: str, chat_id: str, state_ref: dict):
-    """Выполняет команду по имени."""
+def handle_command(cmd: str, chat_id: str, state_ref: dict, full_text: str = ""):
+    """Выполняет команду по имени. full_text — полное сообщение для команд с аргументами."""
     import inspect
     handler = COMMANDS.get(cmd)
     if handler:
-        sig = inspect.signature(handler)
-        if len(sig.parameters) >= 2:
+        sig    = inspect.signature(handler)
+        params = list(sig.parameters.keys())
+        # Команды с аргументами (text=) получают полный текст сообщения
+        if "text" in params:
+            result = handler(chat_id, state_ref, text=full_text)
+        elif len(params) >= 2:
             result = handler(chat_id, state_ref)
-            if isinstance(result, dict):
-                state_ref.update(result)
         else:
-            handler(chat_id, state_ref)
+            result = handler(chat_id, state_ref)
+        if isinstance(result, dict):
+            state_ref.update(result)
     else:
         tg_send(f"Неизвестная команда: {cmd}\nНапиши /help", chat_id)
 
@@ -754,7 +899,7 @@ def telegram_bot_loop(state_ref: dict):
                         continue
                     cmd = text.split()[0].lower()
                     log.info(f"Telegram команда: {cmd}")
-                    handle_command(cmd, chat_id, state_ref)
+                    handle_command(cmd, chat_id, state_ref, full_text=text)
 
                 # ── Нажатие inline-кнопки ─────────────────────────────────
                 elif "callback_query" in upd:
