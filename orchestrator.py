@@ -22,6 +22,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from prompt_library import get_prompt
+from passport import passport_summary, apply_strategy_update
 
 # ── Кросс-платформенная буферизация (Mac + Windows) ───────────────────────────
 try:
@@ -354,7 +355,11 @@ def main_keyboard() -> dict:
             ],
             [
                 {"text": "📋 Бэклог",      "callback_data": "/backlog"},
+                {"text": "🗺 Паспорт",     "callback_data": "/passport"},
+            ],
+            [
                 {"text": "📋 Отчёт",       "callback_data": "/report"},
+                {"text": "🎯 Лиды",        "callback_data": "/leads"},
             ],
         ]
     }
@@ -667,6 +672,11 @@ def cmd_optimize(chat_id: str, state: dict) -> dict:
     save_state(state)
     return state
 
+def cmd_passport(chat_id: str, _state: dict):
+    """Показывает стратегический паспорт аккаунта."""
+    tg_send(passport_summary(), chat_id)
+
+
 def cmd_backlog(chat_id: str, _state: dict):
     """Показывает очередь тем из Content Backlog."""
     path = BASE / "content_backlog.json"
@@ -848,6 +858,7 @@ COMMANDS = {
     "/diagnose":     cmd_diagnose,
     "/research":     cmd_research,
     "/strategy":     cmd_strategy,
+    "/passport":     cmd_passport,
     "/backlog":      cmd_backlog,
     "/addtopic":     cmd_addtopic,
     "/cleartopic":   cmd_cleartopic,
