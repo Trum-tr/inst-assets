@@ -15,6 +15,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dotenv import load_dotenv
 from prompt_library import get_prompt
+from lead_registry import add_lead, mark_followup_sent, get_leads_for_followup
 
 # Unbuffered output — чтобы логи писались сразу (Mac + Windows)
 try:
@@ -143,31 +144,18 @@ def save_json(path, data):
 
 def send_followups(cl):
     """Отправляет follow-up сообщения лидам через 24 часа."""
-    leads = load_json(LEADS_FILE, [])
-    updated = False
+    pending = get_leads_for_followup(hours=24)
+    if not pending:
+        return
 
-    for lead in leads:
-        if lead.get("followup_sent"):
-            continue
+    for lead in pending:
         temperature = lead.get("temperature", "cold")
         msg = FOLLOWUP_MESSAGES.get(temperature)
         if not msg:
-            lead["followup_sent"] = True  # hot — не трогаем
-            updated = True
+            mark_followup_sent(lead["username"])
             continue
-
-        # Проверяем прошло ли 24 часа
         try:
-            lead_dt = datetime.strptime(lead["date"], "%Y-%m-%d %H:%M")
-        except Exception:
-            continue
-        hours_passed = (datetime.now() - lead_dt).total_seconds() / 3600
-        if hours_passed < 24:
-            continue
-
-        # Ищем тред по username
-        try:
-            username  = lead.get("username", "")
+            username  = lead["username"]
             user_info = cl.user_info_by_username(username)
             threads   = cl.direct_threads(amount=50)
             target    = None
@@ -178,12 +166,9 @@ def send_followups(cl):
                         break
                 if target:
                     break
-
             if target:
                 cl.direct_send(msg, thread_ids=[target.id])
-                lead["followup_sent"] = True
-                lead["followup_at"]   = datetime.now().strftime("%Y-%m-%d %H:%M")
-                updated = True
+                mark_followup_sent(username)
                 print(f"  Follow-up → @{username} [{temperature}]")
                 send_telegram(
                     f"<b>Follow-up отправлен</b>\n"
@@ -192,9 +177,6 @@ def send_followups(cl):
                 time.sleep(5)
         except Exception as e:
             print(f"  Follow-up ошибка @{lead.get('username','')}: {e}")
-
-    if updated:
-        save_json(LEADS_FILE, leads)
 
 
 def reload_triggers():
@@ -227,18 +209,8 @@ def send_telegram(text):
         print(f"  Telegram: {e}")
 
 def log_lead(username, trigger):
-    leads = load_json(LEADS_FILE, [])
     temperature = INTENT_TEMPERATURE.get(trigger, "cold")
-    leads.append({
-        "date":        datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "username":    username,
-        "trigger":     trigger,
-        "temperature": temperature,
-        "status":      "replied",
-        "followup_sent": False,
-        "followup_at": None,
-    })
-    save_json(LEADS_FILE, leads)
+    add_lead(username, trigger, temperature)
     print(f"  Lead: @{username} [{trigger}] temperature={temperature}")
 
 # ── Instagram Client ──────────────────────────────────────────────────────
