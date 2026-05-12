@@ -17,15 +17,17 @@ if not TOKEN:
     sys.exit(1)
 
 FILES = [
-    ("content_agent.py",        "content_agent.py"),
-    ("dm_agent.py",             "dm_agent.py"),
-    ("orchestrator.py",         "orchestrator.py"),
-    ("prompt_library.py",       "prompt_library.py"),
-    ("prompts/carousel.txt",    "prompts/carousel.txt"),
-    ("prompts/reels.txt",       "prompts/reels.txt"),
-    ("prompts/research.txt",    "prompts/research.txt"),
-    ("prompts/dm_reply.txt",    "prompts/dm_reply.txt"),
-    ("prompts/optimization.txt","prompts/optimization.txt"),
+    ("content_agent.py",         "content_agent.py"),
+    ("dm_agent.py",              "dm_agent.py"),
+    ("orchestrator.py",          "orchestrator.py"),
+    ("prompt_library.py",        "prompt_library.py"),
+    ("passport.py",              "passport.py"),
+    ("strategic_passport.json",  "strategic_passport.json"),
+    ("prompts/carousel.txt",     "prompts/carousel.txt"),
+    ("prompts/reels.txt",        "prompts/reels.txt"),
+    ("prompts/research.txt",     "prompts/research.txt"),
+    ("prompts/dm_reply.txt",     "prompts/dm_reply.txt"),
+    ("prompts/optimization.txt", "prompts/optimization.txt"),
 ]
 
 def dl(remote, local):
