@@ -304,6 +304,30 @@ def tg_answer_callback(callback_id: str):
     except Exception:
         pass
 
+
+def register_bot_commands():
+    """Регистрирует команды бота в Telegram-меню.
+    Оставляем только то, что нельзя сделать кнопкой (требует текстовый аргумент).
+    Всё остальное — через кнопки.
+    """
+    commands = [
+        {"command": "addtopic",   "description": "Добавить тему: /addtopic Название | carousel | ГАЙД"},
+        {"command": "cleartopic", "description": "Удалить тему из бэклога: /cleartopic ID"},
+        {"command": "help",       "description": "Все команды и справка"},
+    ]
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/setMyCommands",
+            json={"commands": commands},
+            timeout=10
+        )
+        if r.json().get("ok"):
+            log.info("Telegram-меню обновлено: 3 команды (addtopic, cleartopic, help)")
+        else:
+            log.warning(f"setMyCommands: {r.json()}")
+    except Exception as e:
+        log.warning(f"register_bot_commands: {e}")
+
 def main_keyboard() -> dict:
     """Основная клавиатура с кнопками управления."""
     return {
@@ -1577,12 +1601,16 @@ def main():
     dm_ok = start_dm_agent()
     log.info(f"DM-агент: {'✅ запущен' if dm_ok else '❌ ошибка запуска'}")
 
+    # Регистрируем только нужные команды в меню Telegram
+    register_bot_commands()
+
     tg_send(
         f"<b>🤖 Оркестратор v3.0 запущен</b>\n"
         f"{datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
         f"{'✅' if dm_ok else '❌'} DM-агент\n"
         f"✅ Оркестратор\n\n"
-        f"Нажми кнопку или введи команду:",
+        f"Управление — через кнопки ниже.\n"
+        f"Меню (/) — только для команд с текстом.",
         reply_markup=main_keyboard()
     )
 
