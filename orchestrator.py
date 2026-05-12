@@ -860,18 +860,33 @@ def cmd_restart(chat_id: str, _state: dict):
     time.sleep(2)
     sys.exit(0)
 
-def cmd_viral(chat_id: str, state: dict, dry: bool = False) -> dict:
-    """Запускает Viral Curator Agent — находит и репостит вирусный Reel."""
-    mode = "анализ без публикации" if dry else "поиск + публикация"
+def cmd_viral(chat_id: str, state: dict, text: str = "", dry: bool = False) -> dict:
+    """Запускает Viral Curator Agent.
+    Использование: /viral @username  или  /viral @username --dry
+    Если username не указан — берёт первый из viral_accounts.json.
+    """
+    # Извлекаем username из текста сообщения
+    username = None
+    for part in text.split():
+        if part.startswith("@") and len(part) > 1:
+            username = part.lstrip("@")
+            break
+
+    mode = "анализ (без публикации)" if dry else "поиск + публикация"
+    target_str = f"@{username}" if username else "первый из viral_accounts.json"
+
     tg_send(
-        f"🔥 <b>Viral Curator запущен</b> ({mode})\n\n"
-        f"⏳ Ищу вирусные Reels по нишевым хэштегам...\n"
-        f"Займёт 5-10 минут, результат придёт сюда.",
+        f"🔥 <b>Viral Curator запущен</b>\n"
+        f"Режим: {mode}\n"
+        f"Источник: {target_str}\n\n"
+        f"⏳ Занимает 3-7 минут — результат придёт сюда.",
         chat_id
     )
 
     def _run():
         args = [sys.executable, str(BASE / "viral_curator_agent.py")]
+        if username:
+            args.append(username)
         if dry:
             args.append("--dry")
         env = os.environ.copy()
@@ -894,9 +909,9 @@ def cmd_viral(chat_id: str, state: dict, dry: bool = False) -> dict:
     return state
 
 
-def cmd_viraldry(chat_id: str, state: dict) -> dict:
+def cmd_viraldry(chat_id: str, state: dict, text: str = "") -> dict:
     """Viral Curator в режиме анализа без публикации."""
-    return cmd_viral(chat_id, state, dry=True)
+    return cmd_viral(chat_id, state, text=text, dry=True)
 
 
 def cmd_start_agents(chat_id: str, _state: dict):
