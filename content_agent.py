@@ -20,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 from prompt_library import get_prompt
+from passport import get_passport_context
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -125,9 +126,13 @@ def research_topic(client, trend_context=""):
             "trigger_word": backlog_item.get("trigger_word", "ГАЙД"),
         }
 
-    system_prompt = get_prompt("research")
+    passport_ctx = get_passport_context(["account", "audience", "brand_voice", "content_framework"])
+    base_prompt  = get_prompt("research")
+    system_prompt = base_prompt
+    if passport_ctx:
+        system_prompt = passport_ctx + "\n\n" + base_prompt
     if ctx:
-        system_prompt = get_prompt("research") + f"\n\n{ctx}"
+        system_prompt += f"\n\n{ctx}"
 
     messages = [{"role": "system", "content": system_prompt}]
     if trend_context:
