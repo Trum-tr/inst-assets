@@ -31,6 +31,7 @@ FILES = [
     ("prompts/dm_reply.txt",     "prompts/dm_reply.txt"),
     ("prompts/optimization.txt", "prompts/optimization.txt"),
     ("viral_curator_agent.py",   "viral_curator_agent.py"),
+    ("viral_accounts.json",      "viral_accounts.json"),
 ]
 
 def dl(remote, local):
