@@ -53,11 +53,49 @@ GD = "https://drive.google.com/uc?export=download&id="
 
 # ── URL-ы для триггеров (редактируй здесь) ────────────────────────────────
 TRIGGER_URLS = {
-    "ГАЙД":   f"{GD}1l1hEE4VeyKn3_HeNUDOZdQcELy5Lxbo_",
-    "ОХВАТЫ": f"{GD}1T3aYe-ScCaJ4BkVK_TJQh9VFSCEmmG9O",
-    "REELS":  f"{GD}1JPMZWn_V0EI564UjBYm0a0q9E3wlLi9b",
-    "ПЛАН":   f"{GD}1l1hEE4VeyKn3_HeNUDOZdQcELy5Lxbo_",  # заменить на реальный ID
-    "РАЗБОР": "",  # без URL — личный разбор
+    # Awareness — бесплатные материалы
+    "ГАЙД":          f"{GD}1l1hEE4VeyKn3_HeNUDOZdQcELy5Lxbo_",
+    "ОХВАТЫ":        f"{GD}1T3aYe-ScCaJ4BkVK_TJQh9VFSCEmmG9O",
+    "REELS":         f"{GD}1JPMZWn_V0EI564UjBYm0a0q9E3wlLi9b",
+    "ПЛАН":          f"{GD}1l1hEE4VeyKn3_HeNUDOZdQcELy5Lxbo_",
+    "КЕЙС":          f"{GD}1l1hEE4VeyKn3_HeNUDOZdQcELy5Lxbo_",
+    # Consideration — без URL, личный диалог
+    "СОВЕТ":         "",
+    "СТРАТЕГИЯ":     "",
+    "РАЗБОР":        "",
+    # Decision — горячие лиды
+    "КОНСУЛЬТАЦИЯ":  "",
+    "ЦЕНА":          "",
+    "СОТРУДНИЧЕСТВО":"",
+}
+
+# Классификация интентов по температуре лида
+INTENT_TEMPERATURE = {
+    "ГАЙД":          "cold",
+    "ОХВАТЫ":        "cold",
+    "REELS":         "cold",
+    "ПЛАН":          "cold",
+    "КЕЙС":          "warm",
+    "СОВЕТ":         "warm",
+    "СТРАТЕГИЯ":     "warm",
+    "РАЗБОР":        "warm",
+    "КОНСУЛЬТАЦИЯ":  "hot",
+    "ЦЕНА":          "hot",
+    "СОТРУДНИЧЕСТВО":"hot",
+}
+
+# Follow-up сообщения (отправляются через 24ч если нет ответа)
+FOLLOWUP_MESSAGES = {
+    "cold": (
+        "Привет! 👋 Успел посмотреть материал?\n\n"
+        "Если есть вопросы по своему аккаунту — пиши, разберём! 🔥"
+    ),
+    "warm": (
+        "Привет! 👋 Как дела с аккаунтом?\n\n"
+        "Если хочешь — могу сделать быстрый разбор: пришли ник и скажу "
+        "что конкретно мешает расти 🎯"
+    ),
+    "hot": None,  # горячих не трогаем — они сами напишут
 }
 
 
@@ -103,6 +141,62 @@ def load_json(path, default):
 def save_json(path, data):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
+def send_followups(cl):
+    """Отправляет follow-up сообщения лидам через 24 часа."""
+    leads = load_json(LEADS_FILE, [])
+    updated = False
+
+    for lead in leads:
+        if lead.get("followup_sent"):
+            continue
+        temperature = lead.get("temperature", "cold")
+        msg = FOLLOWUP_MESSAGES.get(temperature)
+        if not msg:
+            lead["followup_sent"] = True  # hot — не трогаем
+            updated = True
+            continue
+
+        # Проверяем прошло ли 24 часа
+        try:
+            lead_dt = datetime.strptime(lead["date"], "%Y-%m-%d %H:%M")
+        except Exception:
+            continue
+        hours_passed = (datetime.now() - lead_dt).total_seconds() / 3600
+        if hours_passed < 24:
+            continue
+
+        # Ищем тред по username
+        try:
+            username  = lead.get("username", "")
+            user_info = cl.user_info_by_username(username)
+            threads   = cl.direct_threads(amount=50)
+            target    = None
+            for t in threads:
+                for u in t.users:
+                    if str(u.pk) == str(user_info.pk):
+                        target = t
+                        break
+                if target:
+                    break
+
+            if target:
+                cl.direct_send(msg, thread_ids=[target.id])
+                lead["followup_sent"] = True
+                lead["followup_at"]   = datetime.now().strftime("%Y-%m-%d %H:%M")
+                updated = True
+                print(f"  Follow-up → @{username} [{temperature}]")
+                send_telegram(
+                    f"<b>Follow-up отправлен</b>\n"
+                    f"@{username} | {lead.get('trigger','')} | {temperature}"
+                )
+                time.sleep(5)
+        except Exception as e:
+            print(f"  Follow-up ошибка @{lead.get('username','')}: {e}")
+
+    if updated:
+        save_json(LEADS_FILE, leads)
+
+
 def reload_triggers():
     """Перечитывает шаблоны из Prompt Library без перезапуска агента."""
     global TRIGGERS
@@ -134,13 +228,18 @@ def send_telegram(text):
 
 def log_lead(username, trigger):
     leads = load_json(LEADS_FILE, [])
+    temperature = INTENT_TEMPERATURE.get(trigger, "cold")
     leads.append({
-        "date":     datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "username": username,
-        "trigger":  trigger,
-        "status":   "replied",
+        "date":        datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "username":    username,
+        "trigger":     trigger,
+        "temperature": temperature,
+        "status":      "replied",
+        "followup_sent": False,
+        "followup_at": None,
     })
     save_json(LEADS_FILE, leads)
+    print(f"  Lead: @{username} [{trigger}] temperature={temperature}")
 
 # ── Instagram Client ──────────────────────────────────────────────────────
 LOGIN_TIMEOUT = 90  # секунд
@@ -288,6 +387,11 @@ def run():
 
             save_json(REPLIED_FILE, list(replied))
             _tick += 1
+
+            # Follow-up раз в час
+            if _tick % 60 == 0:
+                send_followups(cl)
+
             print(f"  [{datetime.now().strftime('%H:%M')}] OK, жду {POLL_INTERVAL}с...")
 
         except LoginRequired:
