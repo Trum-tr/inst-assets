@@ -860,26 +860,39 @@ def cmd_restart(chat_id: str, _state: dict):
     time.sleep(2)
     sys.exit(0)
 
-def cmd_viral(chat_id: str, state: dict, text: str = "", dry: bool = False) -> dict:
-    """Запускает Viral Curator Agent.
-    Использование: /viral @username  или  /viral @username --dry
+def _viral_approval_keyboard() -> dict:
+    """Кнопки подтверждения после анализа вирусного видео."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Опубликовать",  "callback_data": "/viral_publish"},
+                {"text": "🔄 Следующий",     "callback_data": "/viral_next"},
+            ],
+            [
+                {"text": "❌ Отмена",        "callback_data": "/viral_cancel"},
+            ],
+        ]
+    }
+
+
+def cmd_viral(chat_id: str, state: dict, text: str = "") -> dict:
+    """Анализирует вирусное видео и показывает кнопки подтверждения.
+    Использование: /viral @username
     Если username не указан — берёт первый из viral_accounts.json.
     """
-    # Извлекаем username из текста сообщения
     username = None
     for part in text.split():
         if part.startswith("@") and len(part) > 1:
             username = part.lstrip("@")
             break
 
-    mode = "анализ (без публикации)" if dry else "поиск + публикация"
     target_str = f"@{username}" if username else "первый из viral_accounts.json"
-
+    if username:
+        state["last_viral_username"] = username
     tg_send(
-        f"🔥 <b>Viral Curator запущен</b>\n"
-        f"Режим: {mode}\n"
-        f"Источник: {target_str}\n\n"
-        f"⏳ Занимает 3-7 минут — результат придёт сюда.",
+        f"🔥 <b>Viral Curator</b>\n"
+        f"Ищу вирусное видео у {target_str}...\n"
+        f"⏳ Займёт 1-2 минуты.",
         chat_id
     )
 
@@ -887,9 +900,77 @@ def cmd_viral(chat_id: str, state: dict, text: str = "", dry: bool = False) -> d
         args = [sys.executable, str(BASE / "viral_curator_agent.py")]
         if username:
             args.append(username)
-        if dry:
-            args.append("--dry")
         env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"]       = "1"
+
+        try:
+            result = subprocess.run(
+                args, capture_output=True, text=True, timeout=300,
+                cwd=str(BASE), encoding="utf-8", env=env
+            )
+        except subprocess.TimeoutExpired:
+            tg_send("⏰ Viral Curator: таймаут. Попробуй позже.", chat_id)
+            return
+        except Exception as e:
+            tg_send(f"❌ Viral Curator: {e}", chat_id)
+            return
+
+        # Читаем результат анализа
+        pending_file = BASE / "viral_pending.json"
+        if not pending_file.exists():
+            err = (result.stdout + result.stderr)[-300:]
+            tg_send(f"❌ Анализ не удался:\n<code>{err}</code>", chat_id)
+            return
+
+        try:
+            pending  = json.loads(pending_file.read_text(encoding="utf-8"))
+        except Exception as e:
+            tg_send(f"❌ Ошибка чтения pending: {e}", chat_id)
+            return
+
+        if "error" in pending:
+            tg_send(f"⚠️ {pending['error']}", chat_id)
+            return
+
+        media    = pending.get("media", {})
+        analysis = pending.get("analysis", {})
+        views    = media.get("views", 0)
+        likes    = media.get("likes", 0)
+        user     = media.get("user", "?")
+
+        def fv(n):
+            if n >= 1_000_000: return f"{n/1_000_000:.1f}М"
+            if n >= 1_000:     return f"{n//1_000}к"
+            return str(n) if n else "?"
+
+        tg_send(
+            f"<b>🔥 Найдено вирусное видео</b>\n\n"
+            f"👤 Автор: @{user}\n"
+            f"👁 Просмотры: {fv(views)}\n"
+            f"❤️ Лайки: {fv(likes)}\n\n"
+            f"<b>Почему вирусное:</b>\n{analysis.get('why_viral','')}\n\n"
+            f"<b>Инсайты для разбора:</b>\n"
+            f"1. {analysis.get('insight_1','')}\n"
+            f"2. {analysis.get('insight_2','')}\n"
+            f"3. {analysis.get('insight_3','')}\n\n"
+            f"<b>Каптион:</b>\n<i>{analysis.get('repost_caption','')[:200]}...</i>\n\n"
+            f"Публиковать это видео?",
+            chat_id,
+            reply_markup=_viral_approval_keyboard()
+        )
+
+    threading.Thread(target=_run, daemon=True).start()
+    return state
+
+
+def cmd_viral_publish(chat_id: str, state: dict) -> dict:
+    """Публикует видео из viral_pending.json."""
+    tg_send("⏳ Скачиваю видео, накладываю оверлей и публикую...\nЭто займёт 3-5 минут.", chat_id)
+
+    def _run():
+        args = [sys.executable, str(BASE / "viral_curator_agent.py"), "--publish-pending"]
+        env  = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"]       = "1"
         try:
@@ -897,21 +978,68 @@ def cmd_viral(chat_id: str, state: dict, text: str = "", dry: bool = False) -> d
                 args, capture_output=True, text=True, timeout=600,
                 cwd=str(BASE), encoding="utf-8", env=env
             )
-            if result.returncode != 0:
-                err = (result.stdout + result.stderr)[-400:]
-                tg_send(f"⚠️ Viral Curator ошибка:\n<code>{err}</code>", chat_id)
+            out = result.stdout + result.stderr
+            if result.returncode == 0 and "Опубликовано" in out:
+                url = ""
+                for line in out.splitlines():
+                    if "instagram.com/reel/" in line:
+                        url = line.strip().split()[-1]
+                        break
+                tg_send(
+                    f"✅ <b>Reel опубликован!</b>\n"
+                    + (f"<a href='{url}'>Открыть в Instagram</a>" if url else ""),
+                    chat_id,
+                    reply_markup=main_keyboard()
+                )
+            else:
+                tg_send(f"❌ Ошибка публикации:\n<code>{out[-300:]}</code>", chat_id)
         except subprocess.TimeoutExpired:
-            tg_send("⏰ Viral Curator: таймаут (10 мин). Попробуй позже.", chat_id)
+            tg_send("⏰ Таймаут публикации (10 мин).", chat_id)
         except Exception as e:
-            tg_send(f"❌ Viral Curator: {e}", chat_id)
+            tg_send(f"❌ {e}", chat_id)
 
     threading.Thread(target=_run, daemon=True).start()
     return state
 
 
+def cmd_viral_next(chat_id: str, state: dict) -> dict:
+    """Пропускает текущее видео и ищет следующее."""
+    # Добавляем текущее видео в обработанные, удаляем pending
+    pending_file = BASE / "viral_pending.json"
+    if pending_file.exists():
+        try:
+            pending = json.loads(pending_file.read_text(encoding="utf-8"))
+            media_id = pending.get("media", {}).get("id")
+            if media_id:
+                processed_file = BASE / "viral_processed.json"
+                processed = set()
+                if processed_file.exists():
+                    processed = set(json.loads(processed_file.read_text(encoding="utf-8")))
+                processed.add(media_id)
+                processed_file.write_text(json.dumps(sorted(processed), ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        pending_file.unlink(missing_ok=True)
+
+    # Берём username из предыдущего поиска или из viral_accounts.json
+    username = state.get("last_viral_username")
+    tg_send(
+        f"🔄 Ищу следующее вирусное видео{f' у @{username}' if username else ''}...",
+        chat_id
+    )
+    return cmd_viral(chat_id, state, text=f"@{username}" if username else "")
+
+
+def cmd_viral_cancel(chat_id: str, state: dict) -> dict:
+    """Отменяет текущий анализ."""
+    (BASE / "viral_pending.json").unlink(missing_ok=True)
+    tg_send("❌ Отменено. Видео не опубликовано.", chat_id, reply_markup=main_keyboard())
+    return state
+
+
 def cmd_viraldry(chat_id: str, state: dict, text: str = "") -> dict:
-    """Viral Curator в режиме анализа без публикации."""
-    return cmd_viral(chat_id, state, text=text, dry=True)
+    """Viral Curator — только анализ без публикации (алиас для /viral)."""
+    return cmd_viral(chat_id, state, text=text)
 
 
 def cmd_start_agents(chat_id: str, _state: dict):
@@ -959,8 +1087,11 @@ COMMANDS = {
     "/cleartopic":   cmd_cleartopic,
     "/restart":      cmd_restart,
     "/start_agents": cmd_start_agents,
-    "/viral":        cmd_viral,
-    "/viraldry":     cmd_viraldry,
+    "/viral":          cmd_viral,
+    "/viraldry":       cmd_viraldry,
+    "/viral_publish":  cmd_viral_publish,
+    "/viral_next":     cmd_viral_next,
+    "/viral_cancel":   cmd_viral_cancel,
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
