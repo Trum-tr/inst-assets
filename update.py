@@ -30,6 +30,7 @@ FILES = [
     ("prompts/research.txt",     "prompts/research.txt"),
     ("prompts/dm_reply.txt",     "prompts/dm_reply.txt"),
     ("prompts/optimization.txt", "prompts/optimization.txt"),
+    ("viral_curator_agent.py",   "viral_curator_agent.py"),
 ]
 
 def dl(remote, local):
