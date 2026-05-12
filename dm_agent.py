@@ -9,7 +9,7 @@ DM Agent v2.0 — Instagrapi
 Работает в бесконечном цикле (poll каждые 60 сек).
 """
 
-import os, json, time, re, subprocess, sys, signal, io
+import os, json, time, re, subprocess, sys, signal, io, random
 from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
@@ -47,9 +47,9 @@ SESSION_FILE  = Path(__file__).parent / "ig_session.json"
 REPLIED_FILE  = Path(__file__).parent / "dm_replied.json"
 LEADS_FILE    = Path(__file__).parent / "lead_registry.json"
 
-POLL_INTERVAL    = 90   # секунд между опросами (было 60, снижено чтобы не триггерить challenge)
-MAX_THREADS      = 20
-API_ERROR_LIMIT  = 5    # после N ошибок подряд — пауза
+POLL_INTERVAL    = 300  # 5 минут между опросами — безопасный режим
+MAX_THREADS      = 10   # не более 10 диалогов за раз
+API_ERROR_LIMIT  = 3    # после 3 ошибок подряд — пауза
 _error_streak    = 0    # счётчик ошибок подряд
 
 GD = "https://drive.google.com/uc?export=download&id="
@@ -346,6 +346,8 @@ def run():
                     reply  = info["reply"].format(url=info["url"])
                     sender = thread.users[0].username if thread.users else "unknown"
 
+                    # Случайная пауза перед ответом — имитация живого человека
+                    time.sleep(random.uniform(5, 15))
                     cl.direct_send(reply, thread_ids=[thread.id])
                     replied.add(msg_id)
 
@@ -357,7 +359,7 @@ def run():
                         f"PDF отправлен"
                     )
                     print(f"  @{sender} -> {trigger} -> PDF отправлен")
-                    time.sleep(3)
+                    time.sleep(random.uniform(10, 20))
 
             save_json(REPLIED_FILE, list(replied))
             _tick += 1
