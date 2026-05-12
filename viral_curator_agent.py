@@ -47,19 +47,28 @@ DRY_RUN       = "--dry" in sys.argv
 
 # Минимальный порог для считаемого вирусным
 MIN_VIEWS     = 50_000
+MIN_LIKES     = 5_000
 
-# Хэштеги по нише (Instagram-маркетинг для экспертов)
+# Топовые аккаунты по нише Instagram-маркетинга для мониторинга
+# (метод надёжнее хэштегов — не триггерит challenge_required)
+NICHE_ACCOUNTS = [
+    "позвоните_мне_сами",     # placeholder — заменить на реальные аккаунты ниши
+    "later",
+    "hootsuite",
+    "sproutsocial",
+    "garyvee",
+    "mrbeast",
+    "hailleyfindlay",
+    "socialmediaexaminer",
+]
+
+# Хэштеги — используются как запасной метод
 NICHE_HASHTAGS = [
     "instagrammarketing",
     "smm",
     "contentcreator",
     "instagramgrowth",
-    "socialmediamarketing",
     "reelsinstagram",
-    "инстаграм",
-    "смм",
-    "продвижениеинстаграм",
-    "контентмаркетинг",
 ]
 
 client_ai = OpenAI(api_key=OPENAI_KEY)
@@ -110,53 +119,104 @@ def build_client() -> Client:
     return cl
 
 # ── FINDER: поиск вирусных Reels ─────────────────────────────────────────────
-def find_viral_reels(cl: Client, processed: set, limit: int = 3) -> list:
-    """
-    Ищет вирусные Reels по нишевым хэштегам.
-    Возвращает список медиа-объектов с view_count > MIN_VIEWS.
-    """
-    candidates = []
-    checked_tags = []
+def _extract_candidate(m, source: str, processed: set) -> dict | None:
+    """Извлекает данные из медиа-объекта instagrapi. None если не подходит."""
+    media_id = str(m.id)
+    if media_id in processed:
+        return None
+    if m.media_type not in (2, 8):   # 2=video, 8=album
+        return None
 
-    for tag in NICHE_HASHTAGS:
-        if len(candidates) >= limit * 3:
-            break
+    views = getattr(m, "view_count", 0) or 0
+    likes = getattr(m, "like_count",  0) or 0
+
+    if views < MIN_VIEWS and likes < MIN_LIKES:
+        return None
+
+    return {
+        "id":       media_id,
+        "pk":       m.pk,
+        "views":    views,
+        "likes":    likes,
+        "comments": getattr(m, "comment_count", 0) or 0,
+        "caption":  (m.caption_text or "")[:500],
+        "user":     m.user.username,
+        "source":   source,
+        "taken_at": m.taken_at.isoformat() if m.taken_at else "",
+    }
+
+
+def _search_by_accounts(cl: Client, processed: set) -> list:
+    """Мониторит посты топ-аккаунтов ниши — надёжный метод без challenge."""
+    candidates = []
+    # Загружаем список аккаунтов из файла (можно расширять без кода)
+    accounts_file = BASE / "viral_accounts.json"
+    if accounts_file.exists():
         try:
-            medias = cl.hashtag_medias_top(tag, amount=12)
-            checked_tags.append(tag)
-            time.sleep(2)
+            accounts = json.loads(accounts_file.read_text(encoding="utf-8"))
+        except Exception:
+            accounts = NICHE_ACCOUNTS
+    else:
+        accounts = NICHE_ACCOUNTS
+        # Сохраняем для удобного редактирования
+        accounts_file.write_text(
+            json.dumps(accounts, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+    for username in accounts:
+        try:
+            user_id = cl.user_id_from_username(username)
+            medias  = cl.user_medias(user_id, amount=12)
+            time.sleep(3)
 
             for m in medias:
-                media_id = str(m.id)
-                if media_id in processed:
-                    continue
-                if m.media_type not in (2, 8):  # video or album
-                    continue
+                cand = _extract_candidate(m, f"@{username}", processed)
+                if cand:
+                    candidates.append(cand)
 
-                views = getattr(m, "view_count", 0) or 0
-                likes = getattr(m, "like_count",  0) or 0
-
-                # Считаем вирусным: 50k+ просмотров или 5k+ лайков
-                if views >= MIN_VIEWS or likes >= 5_000:
-                    candidates.append({
-                        "id":       media_id,
-                        "pk":       m.pk,
-                        "views":    views,
-                        "likes":    likes,
-                        "comments": getattr(m, "comment_count", 0) or 0,
-                        "caption":  (m.caption_text or "")[:500],
-                        "user":     m.user.username,
-                        "hashtag":  tag,
-                        "taken_at": m.taken_at.isoformat() if m.taken_at else "",
-                    })
+            print(f"  Аккаунт @{username}: проверено {len(medias)} постов")
 
         except Exception as e:
-            print(f"  Hashtag #{tag}: {e}")
-            time.sleep(5)
+            print(f"  @{username}: {str(e)[:60]}")
+            time.sleep(3)
 
-    # Сортируем по просмотрам (самые вирусные первыми)
+    return candidates
+
+
+def _search_by_hashtags(cl: Client, processed: set) -> list:
+    """Поиск по хэштегам — запасной метод (может давать challenge_required)."""
+    candidates = []
+    for tag in NICHE_HASHTAGS:
+        try:
+            medias = cl.hashtag_medias_recent(tag, amount=9)
+            time.sleep(4)
+            for m in medias:
+                cand = _extract_candidate(m, f"#{tag}", processed)
+                if cand:
+                    candidates.append(cand)
+            print(f"  Хэштег #{tag}: проверено {len(medias)} постов")
+        except Exception as e:
+            print(f"  #{tag}: {str(e)[:60]}")
+            time.sleep(5)
+    return candidates
+
+
+def find_viral_reels(cl: Client, processed: set, limit: int = 3) -> list:
+    """
+    Ищет вирусные Reels.
+    Сначала мониторит топ-аккаунты (надёжно), при неудаче — хэштеги.
+    Возвращает до `limit` самых вирусных видео.
+    """
+    print("  Метод 1: мониторинг топ-аккаунтов...")
+    candidates = _search_by_accounts(cl, processed)
+
+    if not candidates:
+        print("  Метод 2: поиск по хэштегам (запасной)...")
+        candidates = _search_by_hashtags(cl, processed)
+
+    # Сортируем по просмотрам (лайки × 10 как прокси при отсутствии просмотров)
     candidates.sort(key=lambda x: -(x["views"] or x["likes"] * 10))
-    print(f"  Найдено кандидатов: {len(candidates)} по {len(checked_tags)} хэштегам")
+    print(f"  Итого кандидатов: {len(candidates)}")
     return candidates[:limit]
 
 # ── ANALYZER: GPT-4o разбор почему видео вирусное ────────────────────────────
