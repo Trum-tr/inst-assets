@@ -23,6 +23,8 @@ FILES = [
     ("prompt_library.py",        "prompt_library.py"),
     ("passport.py",              "passport.py"),
     ("strategic_passport.json",  "strategic_passport.json"),
+    ("lead_registry.py",         "lead_registry.py"),
+    ("dashboard_generator.py",   "dashboard_generator.py"),
     ("prompts/carousel.txt",     "prompts/carousel.txt"),
     ("prompts/reels.txt",        "prompts/reels.txt"),
     ("prompts/research.txt",     "prompts/research.txt"),
