@@ -47,8 +47,10 @@ SESSION_FILE  = Path(__file__).parent / "ig_session.json"
 REPLIED_FILE  = Path(__file__).parent / "dm_replied.json"
 LEADS_FILE    = Path(__file__).parent / "lead_registry.json"
 
-POLL_INTERVAL = 60
-MAX_THREADS   = 20
+POLL_INTERVAL    = 90   # секунд между опросами (было 60, снижено чтобы не триггерить challenge)
+MAX_THREADS      = 20
+API_ERROR_LIMIT  = 5    # после N ошибок подряд — пауза
+_error_streak    = 0    # счётчик ошибок подряд
 
 GD = "https://drive.google.com/uc?export=download&id="
 
@@ -366,6 +368,8 @@ def run():
 
             print(f"  [{datetime.now().strftime('%H:%M')}] OK, жду {POLL_INTERVAL}с...")
 
+            _error_streak = 0  # сбрасываем счётчик при успехе
+
         except LoginRequired:
             print("  Сессия истекла, перелогин...")
             SESSION_FILE.unlink(missing_ok=True)
@@ -375,7 +379,14 @@ def run():
                 print(f"  {e} — жду 5 мин...")
                 time.sleep(300)
         except Exception as e:
-            print(f"  Ошибка: {e}")
+            _error_streak += 1
+            print(f"  Ошибка ({_error_streak}): {e}")
+            # Экспоненциальный backoff при серии ошибок
+            if _error_streak >= API_ERROR_LIMIT:
+                wait = min(POLL_INTERVAL * _error_streak, 600)
+                print(f"  Много ошибок подряд — пауза {wait}с")
+                time.sleep(wait)
+                continue
 
         time.sleep(POLL_INTERVAL)
 
